@@ -4,3 +4,7 @@ __pycache__/
 *.egg-info/
 .venv/
 *.db
+
+# Eval windows are real message data — aggregate numbers go in
+# docs/eval-baseline.md, transcripts never get committed.
+eval/

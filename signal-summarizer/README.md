@@ -355,6 +355,16 @@ WantedBy=multi-user.target
 - **Reconnects.** If signal-cli restarts, the bot reconnects with exponential
   backoff (up to 60s) and keeps its history.
 
+## Design docs
+
+- [`docs/summarization-research.md`](docs/summarization-research.md) — what the
+  evidence says about summarizing chat with a 1–4B model, with confidence marked
+  per finding.
+- [`docs/spec-summary-quality.md`](docs/spec-summary-quality.md) — the
+  implementation spec that follows from it: grounding checks, structure-aware
+  chunking, an eval harness, and the strategy choices that harness is there to
+  settle.
+
 ## Development
 
 ```bash
