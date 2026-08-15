@@ -5,9 +5,11 @@ window, and a summary appears in a sheet — produced by Apple's on-device model
 No network call, no API key, no server, nothing leaves the phone.
 
 This is a patch on top of [Signal-iOS](https://github.com/signalapp/Signal-iOS),
-which you build and install yourself. **Read [Before you start](#before-you-start)
-— this cannot be shipped on the App Store, and it needs re-signing every 7 days
-on a free Apple account.**
+which you build and install yourself, and distribute to your own device through
+TestFlight. **Read [Before you start](#before-you-start) and
+[Getting the fork onto your Signal account](#getting-the-fork-onto-your-signal-account)
+first — link the fork as a secondary device, do not register it, or your real
+Signal app gets deactivated.**
 
 ## Why a fork rather than a keyboard
 
@@ -24,18 +26,81 @@ design where "hit summarize and it summarizes the chat" actually works.
 
 - **No App Store.** Apple will not accept a Signal fork, and Signal's own terms
   do not permit third-party clients on their servers. This is for your own
-  device.
-- **Signing.** A free Apple ID signs an app for **7 days**, then it stops
-  launching until you rebuild. A paid developer account ($99/yr) gets a year.
-- **Trademark.** Signal's name and logo are not covered by the AGPL. If you
-  distribute this to anyone else, rename it and change the icon.
+  device — see [Distributing with TestFlight](#distributing-with-testflight).
+- **Trademark.** Signal's name and logo are not covered by the AGPL. Rename the
+  app and change the icon before uploading it anywhere.
 - **Source.** The AGPL requires you to publish your modified source if you
   distribute the app.
-- **Registration.** Push notifications will not work on a third-party build
-  (Signal's certificate). Register or link the fork as its own device.
 - **Hardware.** Apple's on-device model needs an Apple Intelligence-capable
   device (iPhone 15 Pro or newer) on iOS 26+, with Apple Intelligence turned
   on. On anything older the button explains that instead of summarizing.
+
+## Getting the fork onto your Signal account
+
+**Link it as a secondary device. Do not register it.**
+
+Signal allows one primary device per number. If you register the fork with your
+own number it takes over as primary and your real Signal app is deactivated;
+re-registering the real app then knocks the fork off. That is not the trade you
+want.
+
+Instead, on the fork's registration screen, open the menu on the phone-number
+step and choose **"Link this device as a secondary device"**. The fork joins
+your existing account the way Signal Desktop or an iPad does, and your real
+Signal app stays primary and untouched.
+
+This used to be iPad-only. On current upstream `main`,
+`BuildFlags.linkedPhones` is `true`, and the entry point is gated on
+`UIDevice.current.isIPad || BuildFlags.linkedPhones`
+(`RegistrationPhoneNumberViewController.swift`), so the option is there on
+iPhone with no patch from us. If a future upstream flips that flag off, setting
+it back to `true` in `SignalServiceKit/Environment/BuildFlags.swift` is the
+whole change.
+
+Three things worth knowing:
+
+- **You get history.** Provisioning runs Signal's link-and-sync
+  (`LinkAndSyncManager` in `ProvisioningCoordinatorImpl`), so a newly linked
+  device receives message history from the primary. The summarizer is not
+  limited to messages that arrive after you install it.
+- **Scanning the QR on the same phone is the awkward part.** The fork displays
+  a QR code and the primary app has to scan it with the camera, which it cannot
+  do on its own screen. Screenshot the QR, open the screenshot on a Mac or
+  iPad, and scan it from Signal → Settings → Linked Devices. Tapping an
+  `sgnl://linkdevice` link does *not* short-circuit this: `UrlOpener` shows a
+  warning sheet and sends you to the Linked Devices screen to scan anyway.
+- **No background push.** Signal's servers deliver pushes through Signal's own
+  APNs credentials, which are tied to their bundle ID; your fork has yours, so
+  it will not wake in the background. Messages queue on the server and sync
+  when you open the fork — nothing is lost, but it is not a real-time client.
+  For a summarizer you open on purpose, that is mostly fine.
+
+Everything the summarizer reads works the same on a linked device: messages you
+send from your primary phone arrive as outgoing messages in the fork's database
+and appear in the transcript as "You".
+
+## Distributing with TestFlight
+
+TestFlight is the right call over free-account sideloading: builds last **90
+days** instead of 7, so it is a quarterly rebuild rather than a weekly one.
+
+- **Paid Apple Developer Program required** ($99/yr). Free accounts cannot use
+  TestFlight at all.
+- **Internal testers only.** Internal testers are members of your own App Store
+  Connect team (up to 100), and internal builds do **not** go through Beta App
+  Review. External testing does require review, and a Signal fork is not
+  something to put in front of a reviewer — keep it internal.
+- **It still needs an app record** in App Store Connect under your own bundle
+  ID (set `SIGNAL_BUNDLEID_PREFIX`), with your own App Groups. Archive in Xcode
+  and distribute to TestFlight; recent Xcode offers a "TestFlight Internal
+  Only" distribution option that skips App Store distribution entirely.
+- **Automated validation still runs** on upload — icons, entitlements, privacy
+  manifest. Signal ships a `PrivacyInfo.xcprivacy`, so that part is covered.
+- **Rename it.** The app name is visible throughout App Store Connect, and
+  Signal's trademark is not licensed by the AGPL.
+
+Apple changes these rules from time to time; check the current TestFlight
+documentation before you rely on the specifics above.
 
 ## What is in here
 
