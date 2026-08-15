@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..config import Config
-from ..errors import SummarizationRefused, SummarizerError
+from ..errors import SummarizationRefused, SummarizerError, SummarizerUnavailable
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
@@ -20,7 +20,13 @@ class ClaudeBackend:
     @property
     def client(self) -> Any:
         if self._client is None:
-            import anthropic  # imported lazily: the edge backends need no SDK
+            try:
+                import anthropic  # optional: the local backends need no SDK
+            except ImportError as exc:  # pragma: no cover - depends on the install
+                raise SummarizerUnavailable(
+                    "the claude backend needs the anthropic package: "
+                    "pip install 'signal-summarizer[claude]'"
+                ) from exc
 
             self._client = anthropic.Anthropic()
         return self._client

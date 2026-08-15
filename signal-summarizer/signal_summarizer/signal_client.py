@@ -20,6 +20,11 @@ log = logging.getLogger(__name__)
 
 _SHUTDOWN = object()
 
+# How often the event loop wakes to notice a shutdown. Messages arrive on the
+# reader thread and are handled immediately regardless; this only bounds how
+# long Ctrl-C takes, so keep it long enough to stay out of a phone's way.
+EVENT_POLL_SECONDS = 5.0
+
 
 class SignalRpcError(RuntimeError):
     """The daemon answered a request with a JSON-RPC error."""
@@ -232,7 +237,7 @@ class SignalClient:
         while True:
             try:
                 # A timeout rather than a bare get() so Ctrl-C stays responsive.
-                item = self._events.get(timeout=1.0)
+                item = self._events.get(timeout=EVENT_POLL_SECONDS)
             except queue.Empty:
                 continue
             if item is _SHUTDOWN:

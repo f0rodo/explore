@@ -56,10 +56,12 @@ def _normalize_backend(name: str) -> str:
         return "openai"
     if name in {"anthropic", "api"}:
         return "claude"
-    if name in {"ollama", "openai", "claude"}:
+    if name in {"subprocess", "llama-cli", "exec"}:
+        return "command"
+    if name in {"ollama", "openai", "command", "claude"}:
         return name
     raise ValueError(
-        f"SUMMARIZER_BACKEND must be ollama, openai, or claude — got {name!r}"
+        f"SUMMARIZER_BACKEND must be ollama, openai, command, or claude — got {name!r}"
     )
 
 
@@ -82,6 +84,8 @@ class Config:
     # Edge backends
     edge_endpoint: str = EDGE_ENDPOINTS[DEFAULT_BACKEND]
     edge_model: str = DEFAULT_EDGE_MODEL
+    # For backend="command": the program to run, one process per model call.
+    edge_command: str = ""
     edge_context_tokens: int = 8192
     edge_output_tokens: int = 1024
     edge_temperature: float = 0.2
@@ -97,6 +101,9 @@ class Config:
     command_prefix: str = "!"
     default_window_hours: int = 24
     max_messages: int = 400
+    # Say "working on it" before a summary this many messages or larger, so a
+    # slow on-device model doesn't look like a dead bot. 0 disables it.
+    ack_threshold: int = 60
     # 0 means "derive it from the backend's context window".
     max_transcript_chars: int = 0
     retention_days: int = 30
@@ -145,6 +152,7 @@ class Config:
             backend=backend,
             edge_endpoint=endpoint,
             edge_model=env.get("EDGE_MODEL", DEFAULT_EDGE_MODEL).strip(),
+            edge_command=env.get("EDGE_COMMAND", ""),
             edge_context_tokens=_int(env, "EDGE_CONTEXT_TOKENS", 8192),
             edge_output_tokens=_int(env, "EDGE_OUTPUT_TOKENS", 1024),
             edge_temperature=_float(env, "EDGE_TEMPERATURE", 0.2),
@@ -157,6 +165,7 @@ class Config:
             command_prefix=env.get("SUMMARIZER_PREFIX", "!"),
             default_window_hours=_int(env, "SUMMARIZER_WINDOW_HOURS", 24),
             max_messages=_int(env, "SUMMARIZER_MAX_MESSAGES", 400),
+            ack_threshold=_int(env, "SUMMARIZER_ACK_MESSAGES", 60),
             max_transcript_chars=_int(env, "SUMMARIZER_MAX_CHARS", 0),
             retention_days=_int(env, "SUMMARIZER_RETENTION_DAYS", 30),
             allowed_chats=frozenset(c for c in allowed if c),

@@ -23,10 +23,14 @@ class FakeSignalClient:
 
 
 class FakeSummarizer:
-    def __init__(self, result="a summary", error=None):
+    def __init__(self, result="a summary", error=None, model_calls=1):
         self.result = result
         self.error = error
+        self.model_calls = model_calls
         self.calls = []
+
+    def estimate_calls(self, messages):
+        return self.model_calls if messages else 0
 
     def summarize(self, messages, *, chat_label, window_description):
         self.calls.append((list(messages), chat_label, window_description))
@@ -207,6 +211,66 @@ def test_custom_prefix(config, store):
     assert bot.client.sent[0]["text"].startswith(SUMMARY_HEADER)
     bot.handle_event(group_event("!summarize"))
     assert len(bot.client.sent) == 1  # the old prefix is now just chat
+
+
+# -- slow on-device summaries ------------------------------------------------
+
+
+def seed_history(store, count, chat_id="group:Zm9v"):
+    for i in range(count):
+        store.add(make_message(chat_id=chat_id, timestamp=NOW - HOUR + i, body=f"m{i}"))
+
+
+def make_bot(config, store, summarizer=None, **overrides):
+    config = dataclasses.replace(config, **overrides)
+    return SummarizerBot(
+        config, FakeSignalClient(), store, summarizer or FakeSummarizer(), now=lambda: NOW
+    )
+
+
+def test_no_ack_for_a_small_fast_summary(config, store):
+    bot = make_bot(config, store, ack_threshold=60)
+    seed_history(store, 5)
+    bot.handle_event(group_event("!summarize"))
+    assert len(bot.client.sent) == 1
+    assert bot.client.sent[0]["text"].startswith(SUMMARY_HEADER)
+
+
+def test_ack_when_the_window_is_large(config, store):
+    bot = make_bot(config, store, ack_threshold=20)
+    seed_history(store, 25)
+    bot.handle_event(group_event("!summarize"))
+    ack, summary = bot.client.sent
+    assert "Summarizing 25 messages" in ack["text"]
+    assert summary["text"].startswith(SUMMARY_HEADER)
+
+
+def test_ack_when_the_model_needs_several_passes(config, store):
+    """Multiple passes always means slow, whatever the message count."""
+    bot = make_bot(config, store, summarizer=FakeSummarizer(model_calls=4), ack_threshold=60)
+    seed_history(store, 5)
+    bot.handle_event(group_event("!summarize"))
+    assert "in 4 passes" in bot.client.sent[0]["text"]
+
+
+def test_ack_can_be_disabled(config, store):
+    bot = make_bot(config, store, summarizer=FakeSummarizer(model_calls=9), ack_threshold=0)
+    seed_history(store, 200)
+    bot.handle_event(group_event("!summarize"))
+    assert len(bot.client.sent) == 1
+
+
+def test_the_bots_own_replies_are_not_recorded_as_chat(config, store):
+    """A linked device echoes our sends back as sync messages."""
+    bot = make_bot(config, store, ack_threshold=1)
+    seed_history(store, 3)
+    bot.handle_event(group_event("!summarize"))
+    before = len(store.recent("group:Zm9v"))
+
+    for offset, sent in enumerate(bot.client.sent, start=1):
+        bot.handle_event(group_event(sent["text"], timestamp=NOW + offset, from_self=True))
+
+    assert len(store.recent("group:Zm9v")) == before
 
 
 # -- failure handling --------------------------------------------------------

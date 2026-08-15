@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
@@ -18,8 +19,12 @@ from .summarizer import Summarizer
 log = logging.getLogger(__name__)
 
 SUMMARY_HEADER = "\U0001f4cb Summary"
+ACK_PREFIX = "⏳"  # hourglass
 HOUR_MS = 3_600_000
 PRUNE_INTERVAL_MS = HOUR_MS
+# Remember what we said recently so a linked device echoing our own messages
+# back at us doesn't end up in the history we summarize.
+SENT_MEMORY = 32
 
 _WINDOW_RE = re.compile(r"^(\d+)\s*([mhd])?$", re.IGNORECASE)
 _UNIT_MS = {"m": 60_000, "h": HOUR_MS, "d": 24 * HOUR_MS}
@@ -88,6 +93,7 @@ class SummarizerBot:
         self._sleep = sleep
         self._last_prune = 0
         self._stopped = False
+        self._sent: deque[str] = deque(maxlen=SENT_MEMORY)
 
     # -- event handling -------------------------------------------------------
 
@@ -103,8 +109,10 @@ class SummarizerBot:
         if body.startswith(self.config.command_prefix):
             self.handle_command(message, body[len(self.config.command_prefix) :])
             return
-        if message.from_self and body.startswith(SUMMARY_HEADER):
-            return  # don't summarize our own summaries
+        if message.from_self and (
+            body in self._sent or body.startswith((SUMMARY_HEADER, ACK_PREFIX))
+        ):
+            return  # don't record our own replies as conversation
         self.store.add(message)
         self._maybe_prune()
 
@@ -141,12 +149,22 @@ class SummarizerBot:
             )
             return
 
+        calls = self.summarizer.estimate_calls(history)
         log.info(
-            "summarizing %d messages from %s (%s)",
+            "summarizing %d messages from %s (%s) in %d model call(s)",
             len(history),
             message.chat_id,
             window.description,
+            calls,
         )
+        if self._should_ack(len(history), calls):
+            passes = f" in {calls} passes" if calls > 1 else ""
+            self._reply(
+                message.chat_id,
+                f"{ACK_PREFIX} Summarizing {len(history)} messages{passes}. "
+                "This can take a minute.",
+            )
+
         try:
             summary = self.summarizer.summarize(
                 history, chat_label=label, window_description=window.description
@@ -188,7 +206,15 @@ class SummarizerBot:
             "I can only summarize messages sent while I was running."
         )
 
+    def _should_ack(self, message_count: int, calls: int) -> bool:
+        if self.config.ack_threshold <= 0:
+            return False
+        # More than one model call always means a slow summary, whatever the
+        # message count; otherwise fall back to the configured threshold.
+        return calls > 1 or message_count >= self.config.ack_threshold
+
     def _reply(self, chat_id: str, text: str) -> None:
+        self._sent.append(text)
         kind, identifier = split_chat_id(chat_id)
         try:
             if kind == "group":

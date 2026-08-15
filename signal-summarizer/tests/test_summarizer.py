@@ -114,6 +114,23 @@ def test_many_chunks_reduce_in_rounds(config):
     assert len(final) == 1
 
 
+def test_estimate_calls_counts_chunks_plus_the_combine(config):
+    config = dataclasses.replace(config, max_transcript_chars=300)
+    summarizer = Summarizer(config, FakeBackend())
+    short = [make_message(timestamp=1000 + i, body="y" * 20) for i in range(3)]
+    long = [make_message(timestamp=1000 + i, body="y" * 60) for i in range(12)]
+
+    assert summarizer.estimate_calls([]) == 0
+    assert summarizer.estimate_calls(short) == 1
+    assert summarizer.estimate_calls(long) > 2
+    # the estimate matches what summarizing actually costs
+    backend = FakeBackend()
+    Summarizer(config, backend).summarize(
+        long, chat_label="Launch", window_description="the last 24 hours"
+    )
+    assert len(backend.calls) == summarizer.estimate_calls(long)
+
+
 def test_transcript_budget_follows_the_edge_context_window(config):
     small = dataclasses.replace(config, edge_context_tokens=4096, edge_output_tokens=512)
     large = dataclasses.replace(config, edge_context_tokens=32768, edge_output_tokens=512)

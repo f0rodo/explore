@@ -40,9 +40,13 @@ def build_backend(config: Config) -> Backend:
         from .edge import OpenAICompatibleBackend
 
         return OpenAICompatibleBackend(config)
+    if config.backend == "command":
+        from .command import CommandBackend
+
+        return CommandBackend(config)
     raise ValueError(
         f"unknown SUMMARIZER_BACKEND {config.backend!r} "
-        "(expected: ollama, openai, or claude)"
+        "(expected: ollama, openai, command, or claude)"
     )
 
 

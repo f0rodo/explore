@@ -98,8 +98,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 ```
 
-The edge backends use only the standard library. `anthropic` is installed as a
-dependency but is imported only if you select the Claude backend.
+The local backends use only the standard library — there are no required
+dependencies, which is what makes the install work on a phone. The Anthropic
+SDK is an extra: `pip install -e ".[claude]"` if you want that backend.
 
 ### 5. Configure and check
 
@@ -130,6 +131,92 @@ signal-summarizer run          # or: python -m signal_summarizer run
 ```
 
 Send `!help` in any chat the account is in to confirm it is alive.
+
+## Running entirely on the phone (Android)
+
+The whole stack fits on an Android phone with no server anywhere: signal-cli,
+the bot, and the model all run on the device.
+
+```bash
+# in Termux (install it from F-Droid — the Play Store build is abandoned)
+pkg install git
+git clone <this repo> ~/explore
+bash ~/explore/signal-summarizer/deploy/termux-setup.sh
+```
+
+Then link it to your Signal account, set your number, and start it:
+
+```bash
+proot-distro login debian -- signal-cli link -n summarizer-phone   # scan the QR
+$EDITOR ~/signal-summarizer.env                                    # SIGNAL_ACCOUNT=+1...
+bash ~/explore/signal-summarizer/deploy/termux-run.sh
+```
+
+**iOS cannot do this.** iOS has no way to run a background process or read
+Signal's message store, and Signal iOS exposes no automation API — there is no
+version of this that works on an iPhone. If that is your phone, the options are
+an old Android device, or a small always-on machine (a Raspberry Pi works) that
+you reach from Signal as usual.
+
+### How it is laid out on the device
+
+| Where | What | Why |
+| --- | --- | --- |
+| Termux (bionic libc) | llama.cpp, the Python bot | Compiled on-device; the bot needs only the standard library |
+| proot Debian (glibc) | signal-cli, a JRE | signal-cli's native libsignal needs glibc, which Termux does not have |
+
+Both share the phone's network namespace, so they talk over `127.0.0.1`.
+
+### The awkward part: libsignal on arm64
+
+signal-cli's releases bundle native libsignal for x86_64 Linux, Windows and
+macOS only — not for the arm64 CPU in your phone. `deploy/install-signal-cli.sh`
+handles this: it reads which libsignal version the signal-cli release wants,
+downloads the matching prebuilt aarch64 build from
+[exquo/signal-libs-build](https://github.com/exquo/signal-libs-build), and
+swaps it into the jar, mirroring the naming the jar already uses. If no
+prebuilt exists for that version, it says so and stops rather than failing
+mysteriously later; pin an older `SIGNAL_CLI_VERSION` or
+[build libsignal yourself](https://github.com/AsamK/signal-cli/wiki/Provide-native-lib-for-libsignal).
+
+signal-cli 0.14.x also wants JRE 25, which is newer than Debian stable ships.
+The installer verifies with `signal-cli --version` and tells you what to fix.
+
+### Model, and why nothing stays resident
+
+The phone profile uses `SUMMARIZER_BACKEND=command`: one `llama-cli` process
+per summary, weights mmapped for that call and released afterwards. A resident
+`llama-server` is faster per summary but holds ~1 GB, and Android will
+eventually kill either it or whatever else you were using. Reloading a 1B model
+from page cache costs a second or two, which is noise next to generation time.
+
+`llama-cli`'s flag names move between releases, so `signal-summarizer check`
+runs your exact `EDGE_COMMAND` and shows you the result — run it after any
+llama.cpp update.
+
+To keep a resident server instead, set `SUMMARIZER_BACKEND=openai` and start
+`llama-server -hf <repo>:<quant> -c 4096 --port 8080`.
+
+### What to expect
+
+- **Speed.** A 1B model at Q4 does roughly 10–30 tokens/second on a recent
+  phone, so a summary takes tens of seconds and a long window that needs
+  several passes can take minutes. The bot replies "⏳ Summarizing N messages"
+  first (`SUMMARIZER_ACK_MESSAGES`) so the chat knows it is working, and it
+  handles one summary at a time — messages that arrive meanwhile are queued,
+  not dropped.
+- **Quality.** A 1B model produces a serviceable "what happened" digest. Attribution
+  ("who said what") gets noticeably better at 3B and above; if the phone has
+  8 GB+ of RAM, use `Qwen2.5-3B-Instruct-GGUF:Q4_K_M` and raise
+  `EDGE_CONTEXT_TOKENS` to 8192.
+- **Battery.** The bot idles on a socket and costs nothing until asked;
+  generation is what drains the battery. `termux-run.sh` takes a wake lock —
+  without one, Android suspends the process and messages arrive in bursts when
+  the screen turns on. Exempt Termux from battery optimization too.
+- **Storage.** ~1 GB for the model, plus a few hundred MB for the Debian
+  userland and the JRE.
+- **Scope.** Set `SUMMARIZER_ALLOWED_CHATS` on a phone. Otherwise the bot
+  records every conversation the linked account can see into its database.
 
 ## Choosing a local model
 
@@ -170,11 +257,12 @@ a bigger context window is the fix.
 | `SIGNAL_ACCOUNT` | *(required)* | The number signal-cli is registered or linked to |
 | `SIGNAL_RPC_ADDRESS` | `tcp://127.0.0.1:7583` | `tcp://host:port` or `unix:///path/to.sock` |
 | `SUMMARIZER_DB` | `signal-summarizer.db` | SQLite file for message history |
-| `SUMMARIZER_BACKEND` | `ollama` | `ollama`, `openai` (llama.cpp/LM Studio/vLLM), or `claude` |
+| `SUMMARIZER_BACKEND` | `ollama` | `ollama`, `openai` (llama.cpp/LM Studio/vLLM), `command` (subprocess per summary), or `claude` |
 | `SUMMARIZER_PREFIX` | `!` | Command prefix |
 | `SUMMARIZER_WINDOW_HOURS` | `24` | Default window for a bare `!summarize` |
 | `SUMMARIZER_MAX_MESSAGES` | `400` | Cap on messages fed to one summary |
 | `SUMMARIZER_MAX_CHARS` | *(derived)* | Transcript characters per model call; defaults to a value derived from the context window |
+| `SUMMARIZER_ACK_MESSAGES` | `60` | Say "working on it" before summaries this large, or any summary needing several passes; `0` disables |
 | `SUMMARIZER_RETENTION_DAYS` | `30` | History older than this is deleted |
 | `SUMMARIZER_ALLOWED_CHATS` | *(all)* | Comma-separated chat ids to restrict the bot to |
 
@@ -184,6 +272,7 @@ Edge backends (`ollama`, `openai`):
 | --- | --- | --- |
 | `EDGE_ENDPOINT` | `http://127.0.0.1:11434` (ollama), `http://127.0.0.1:8080/v1` (openai) | Model server base URL; `OLLAMA_HOST` is honoured too |
 | `EDGE_MODEL` | `llama3.2:3b` | Model name as the server knows it |
+| `EDGE_COMMAND` | *(none)* | `command` backend only: the program to run per model call. The prompt goes to stdin, or into `{system}`/`{prompt}` placeholders if you use them |
 | `EDGE_CONTEXT_TOKENS` | `8192` | Context window to request; drives the transcript budget |
 | `EDGE_OUTPUT_TOKENS` | `1024` | Cap on summary length |
 | `EDGE_TEMPERATURE` | `0.2` | Low keeps summaries factual |
@@ -281,6 +370,8 @@ access, API key, or local model is required to run them.
 | `signal_summarizer/store.py` | SQLite history |
 | `signal_summarizer/summarizer.py` | Prompts, chunking, and combining partial summaries |
 | `signal_summarizer/backends/edge.py` | Ollama and OpenAI-compatible local models |
+| `signal_summarizer/backends/command.py` | A local model run as a subprocess per summary |
 | `signal_summarizer/backends/claude.py` | Anthropic Messages API |
 | `signal_summarizer/bot.py` | Commands, replies, and the listen loop |
 | `signal_summarizer/cli.py` | `run`, `check`, `chats`, `digest` |
+| `deploy/termux-*.sh`, `deploy/phone.env` | On-device Android setup and startup |

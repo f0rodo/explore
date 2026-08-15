@@ -121,6 +121,16 @@ class Summarizer:
             self._backend = build_backend(self.config)
         return self._backend
 
+    def estimate_calls(self, messages: Sequence[Message]) -> int:
+        """How many model calls this window needs — cheap, no model involved.
+
+        The bot uses it to warn the chat before a slow on-device summary.
+        """
+        if not messages:
+            return 0
+        chunks = len(chunk_messages(messages, self.config.transcript_budget))
+        return chunks + 1 if chunks > 1 else 1
+
     def summarize(
         self,
         messages: Sequence[Message],

@@ -90,6 +90,50 @@ def test_message_in_summary_out_via_a_local_model(config, store):
     assert json.dumps(send)  # the request is plain JSON-RPC
 
 
+def test_phone_profile_end_to_end(config, store, tmp_path):
+    """The on-device shape: no resident server, a subprocess per model call."""
+    from test_command_backend import fake_model
+
+    llama = fake_model(
+        tmp_path,
+        """
+import sys
+prompt = sys.stdin.read()
+sys.stderr.write("llama_perf_context_print: 14.2 tokens per second\\n")
+print("Standup moved to 10.")
+print("[end of text]")
+""",
+    )
+    config = dataclasses.replace(
+        config,
+        backend="command",
+        edge_command=f"{llama} -c 4096 -n 512 -f /dev/stdin",
+        ack_threshold=1,  # a phone is slow enough to always say "working on it"
+    )
+
+    daemon = StubDaemon(ok)
+    client = SignalClient(daemon.address, account=ACCOUNT, request_timeout=5)
+    bot = SummarizerBot(config, client, store, Summarizer(config), now=lambda: NOW)
+    thread = threading.Thread(target=bot.run, kwargs={"max_reconnects": 1}, daemon=True)
+    thread.start()
+    try:
+        daemon.wait_until_connected()
+        daemon.push(receive("standup is at 10 tomorrow", NOW - 60_000))
+        assert wait_for(lambda: store.recent("group:Zm9vYmFy"))
+        daemon.push(receive("!summarize 2h", NOW))
+        assert wait_for(lambda: len([r for r in daemon.requests if r["method"] == "send"]) == 2)
+    finally:
+        bot.stop()
+        client.close()
+        thread.join(timeout=5)
+        daemon.close()
+
+    ack, summary = [r["params"]["message"] for r in daemon.requests if r["method"] == "send"]
+    assert "Summarizing 1 messages" in ack
+    assert summary.startswith(SUMMARY_HEADER)
+    assert "Standup moved to 10." in summary
+
+
 def test_local_model_down_is_reported_in_chat(config, store):
     config = dataclasses.replace(
         config, backend="ollama", edge_endpoint="http://127.0.0.1:1", edge_timeout=2

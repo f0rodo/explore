@@ -30,6 +30,45 @@ def test_backend_aliases(value, expected):
     assert Config.from_env({**BASE, "SUMMARIZER_BACKEND": value}).backend == expected
 
 
+def test_command_backend_reads_its_command():
+    config = Config.from_env(
+        {
+            **BASE,
+            "SUMMARIZER_BACKEND": "command",
+            "EDGE_COMMAND": "llama-cli -m model.gguf",
+        }
+    )
+    assert config.backend == "command"
+    assert config.is_edge is True
+    assert config.edge_command == "llama-cli -m model.gguf"
+
+
+def test_phone_env_file_parses():
+    """deploy/phone.env is the documented on-device configuration."""
+    import pathlib
+
+    path = pathlib.Path(__file__).resolve().parents[1] / "deploy" / "phone.env"
+    env = dict(BASE)
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        if len(value) > 1 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]  # the shell strips these when sourcing
+        if value:
+            env[key] = value
+
+    config = Config.from_env(env)
+    assert config.backend == "command"
+    assert "llama-cli" in config.edge_command
+    assert config.edge_context_tokens == 4096
+    assert config.ack_threshold == 20
+    # the transcript budget has to leave room for the answer inside 4096 tokens
+    assert 0 < config.transcript_budget < 4096 * 3.5
+
+
 def test_unknown_backend_is_rejected():
     with pytest.raises(ValueError, match="SUMMARIZER_BACKEND"):
         Config.from_env({**BASE, "SUMMARIZER_BACKEND": "gpt4all"})
