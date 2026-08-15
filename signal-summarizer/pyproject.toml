@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signal-summarizer"
+version = "0.1.0"
+description = "A Signal bot that summarizes group and direct-message chats with the Claude API"
+requires-python = ">=3.10"
+dependencies = ["anthropic>=0.69"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+signal-summarizer = "signal_summarizer.cli:main"
+
+[tool.setuptools]
+packages = ["signal_summarizer"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
