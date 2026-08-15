@@ -8,9 +8,11 @@ import sys
 import time
 from datetime import datetime
 
+from .backends import build_backend
 from .bot import HOUR_MS, SUMMARY_HEADER, SummarizerBot
 from .config import Config
 from .envelope import split_chat_id
+from .errors import SummarizerError
 from .signal_client import SignalClient
 from .store import MessageStore
 from .summarizer import Summarizer
@@ -31,6 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("run", help="listen for messages and answer summary commands")
     sub.add_parser("chats", help="list the chats with recorded history")
+    sub.add_parser("check", help="verify the summarization backend is reachable")
 
     digest = sub.add_parser(
         "digest", help="summarize a chat once (for cron-driven daily digests)"
@@ -48,10 +51,43 @@ def cmd_run(config: Config) -> int:
     client = SignalClient(
         config.rpc_address, account=config.account, request_timeout=config.request_timeout
     )
+    summarizer = Summarizer(config)
     with MessageStore(config.db_path) as store:
-        bot = SummarizerBot(config, client, store, Summarizer(config))
+        bot = SummarizerBot(config, client, store, summarizer)
+        logging.info("summarizing with %s", summarizer.backend.describe())
         logging.info("listening for messages on %s as %s", config.rpc_address, config.account)
         bot.run()
+    return 0
+
+
+def cmd_check(config: Config) -> int:
+    try:
+        backend = build_backend(config)
+    except ValueError as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 2
+
+    print(f"backend:   {backend.describe()}")
+    print(f"transcript budget: {config.transcript_budget} characters per model call")
+    try:
+        print(f"status:    {backend.check()}")
+    except SummarizerError as exc:
+        print(f"status:    FAILED - {exc}", file=sys.stderr)
+        return 1
+
+    start = time.monotonic()
+    try:
+        reply = backend.complete(
+            "You are a test harness. Answer in five words or fewer.",
+            "Reply with: the summarizer is ready.",
+        )
+    except SummarizerError as exc:
+        print(f"test call: FAILED - {exc}", file=sys.stderr)
+        return 1
+    elapsed = time.monotonic() - start
+    print(f"test call: ok in {elapsed:.1f}s - {reply.splitlines()[0][:80]}")
+    if config.is_edge:
+        print("Message text stays on this machine with this backend.")
     return 0
 
 
@@ -92,9 +128,13 @@ def cmd_digest(config: Config, args: argparse.Namespace) -> int:
             print(f"No messages recorded for {args.chat} in {description}.", file=sys.stderr)
             return 1
 
-        summary = Summarizer(config).summarize(
-            history, chat_label=label, window_description=description
-        )
+        try:
+            summary = Summarizer(config).summarize(
+                history, chat_label=label, window_description=description
+            )
+        except SummarizerError as exc:
+            print(f"summarization failed: {exc}", file=sys.stderr)
+            return 1
 
     header = f"{SUMMARY_HEADER} of {label} - {description} ({len(history)} messages)"
     body = f"{header}\n\n{summary}"
@@ -129,6 +169,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(config)
     if args.command == "chats":
         return cmd_chats(config)
+    if args.command == "check":
+        return cmd_check(config)
     if args.command == "digest":
         return cmd_digest(config, args)
     return 2

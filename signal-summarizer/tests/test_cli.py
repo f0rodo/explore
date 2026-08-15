@@ -1,4 +1,5 @@
 from conftest import ACCOUNT, make_message
+from http_stub import ModelServer, ollama_reply
 
 from signal_summarizer import cli
 from signal_summarizer.store import MessageStore
@@ -116,6 +117,34 @@ def test_digest_send_posts_to_the_chat(monkeypatch, tmp_path):
     assert group_id == "abc="
     assert recipient is None
     assert "everything is fine" in text
+
+
+def test_check_reports_a_working_local_model(monkeypatch, tmp_path, capsys):
+    routes = {
+        "/api/tags": {"models": [{"name": "llama3.2:3b"}]},
+        "/api/chat": ollama_reply("the summarizer is ready"),
+    }
+    with ModelServer(routes) as model:
+        env(monkeypatch, tmp_path / "s.db", EDGE_ENDPOINT=model.url)
+        assert cli.main(["check"]) == 0
+    out = capsys.readouterr().out
+    assert "ollama llama3.2:3b" in out
+    assert "transcript budget" in out
+    assert "test call: ok" in out
+    assert "stays on this machine" in out
+
+
+def test_check_fails_when_the_model_is_not_installed(monkeypatch, tmp_path, capsys):
+    with ModelServer({"/api/tags": {"models": [{"name": "mistral:7b"}]}}) as model:
+        env(monkeypatch, tmp_path / "s.db", EDGE_ENDPOINT=model.url)
+        assert cli.main(["check"]) == 1
+    assert "ollama pull" in capsys.readouterr().err
+
+
+def test_check_fails_when_nothing_is_listening(monkeypatch, tmp_path, capsys):
+    env(monkeypatch, tmp_path / "s.db", EDGE_ENDPOINT="http://127.0.0.1:1", EDGE_TIMEOUT="2")
+    assert cli.main(["check"]) == 1
+    assert "FAILED" in capsys.readouterr().err
 
 
 def test_digest_rejects_a_malformed_chat_id(monkeypatch, tmp_path, capsys):

@@ -10,9 +10,10 @@ from typing import Any, Callable, Mapping
 
 from .config import Config
 from .envelope import Message, parse_envelope, split_chat_id
+from .errors import SummarizerError, SummarizerUnavailable
 from .signal_client import SignalClient
 from .store import MessageStore
-from .summarizer import SummarizationRefused, Summarizer
+from .summarizer import Summarizer
 
 log = logging.getLogger(__name__)
 
@@ -150,10 +151,20 @@ class SummarizerBot:
             summary = self.summarizer.summarize(
                 history, chat_label=label, window_description=window.description
             )
-        except SummarizationRefused as exc:
+        except SummarizerUnavailable:
+            # The endpoint and error belong in the operator's logs, not in a
+            # chat everyone in the group can read.
+            log.exception("summarizer backend unavailable for %s", message.chat_id)
+            self._reply(
+                message.chat_id,
+                "My summarizer model isn't responding right now. "
+                "The details are in my logs.",
+            )
+            return
+        except SummarizerError as exc:
             self._reply(message.chat_id, f"I couldn't summarize that: {exc}")
             return
-        except Exception:  # noqa: BLE001 - a bad API call shouldn't kill the bot
+        except Exception:  # noqa: BLE001 - a bad model call shouldn't kill the bot
             log.exception("summarization failed for %s", message.chat_id)
             self._reply(
                 message.chat_id,
