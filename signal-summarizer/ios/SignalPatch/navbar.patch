@@ -1,0 +1,14 @@
+diff --git a/Signal/ConversationView/ConversationViewController+UI.swift b/Signal/ConversationView/ConversationViewController+UI.swift
+index fcabd9b..04cda06 100644
+--- a/Signal/ConversationView/ConversationViewController+UI.swift
++++ b/Signal/ConversationView/ConversationViewController+UI.swift
+@@ -183,6 +183,9 @@ extension ConversationViewController {
+                 }
+             }
+ 
++            // Summarize this conversation with the on-device model.
++            barButtons.append(summarizeBarButtonItem)
++
+             navigationItem.rightBarButtonItems = barButtons
+             return
+         }

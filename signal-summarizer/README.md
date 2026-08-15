@@ -1,5 +1,11 @@
 # signal-summarizer
 
+> **Looking for the iOS app?** [`ios/`](ios/) is a different shape of the same
+> idea: a **Summarize** button built into a fork of Signal iOS, summarizing with
+> Apple's on-device model. No bot account, no daemon, nothing off the phone.
+> The rest of this README is the bot, which runs as a service beside signal-cli
+> on a Linux box, a Raspberry Pi, or an Android phone.
+
 A Signal bot that catches you up on a chat. Ask it in the conversation:
 
 ```
